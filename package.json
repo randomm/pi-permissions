@@ -1,26 +1,27 @@
 {
-  "name": "@randomm/pi-permissions",
-  "version": "0.1.0",
-  "type": "module",
-  "keywords": ["pi-package"],
-  "pi": {
-    "extensions": ["./index.ts"]
-  },
-  "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
-  },
-  "dependencies": {},
-  "devDependencies": {
-    "typescript": "^5.0.0",
-    "vitest": "^1.0.0",
-    "@types/node": "^20.0.0"
-  },
-  "files": ["*.ts", "README.md"],
-  "scripts": {
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "lint": "biome check .",
-    "format": "biome format --write .",
-    "typecheck": "tsc --noEmit"
-  }
+	"name": "@randomm/pi-permissions",
+	"version": "0.1.0",
+	"type": "module",
+	"keywords": ["pi-package"],
+	"pi": {
+		"extensions": ["./index.ts"]
+	},
+	"peerDependencies": {
+		"@mariozechner/pi-coding-agent": "*"
+	},
+	"dependencies": {},
+	"devDependencies": {
+		"@biomejs/biome": "1.9.4",
+		"@types/node": "^20.0.0",
+		"typescript": "^5.0.0",
+		"vitest": "2"
+	},
+	"files": ["*.ts", "README.md"],
+	"scripts": {
+		"test": "vitest run",
+		"test:coverage": "vitest run --coverage",
+		"lint": "biome check .",
+		"format": "biome format --write .",
+		"typecheck": "tsc --noEmit"
+	}
 }
