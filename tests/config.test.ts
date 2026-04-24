@@ -2,7 +2,12 @@ import { mkdir, mkdtemp, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { isPermissionAllowed, loadConfig, parseConfig } from '../config';
+import {
+	DENY_ALL_CONFIG,
+	checkPermission,
+	loadConfig,
+	parseConfigWithDecisions,
+} from '../config';
 
 let tempDir: string;
 
@@ -36,12 +41,17 @@ describe('parseConfig', () => {
 			bash: { '*': 'deny', 'npm install *': 'allow' },
 			tools: { read: 'allow', write: 'deny' },
 		});
-		const result = parseConfig(json);
-		expect(result).toEqual({
-			default: 'deny',
-			bash: { '*': 'deny', 'npm install *': 'allow' },
-			tools: { read: 'allow', write: 'deny' },
+		const result = parseConfigWithDecisions(json);
+		// __bashCompiled is an internal field - test the public interface
+		expect(result.default).toBe('deny');
+		expect(result.bash).toEqual({ '*': 'deny', 'npm install *': 'allow' });
+		expect(result.tools).toEqual({ read: 'allow', write: 'deny' });
+		expect(result._decisions).toEqual({
+			'npm install *': { allowed: true, timestamp: '2026-04-23T10:00:00Z' },
 		});
+		// Verify pre-compiled patterns exist
+		expect(result.__bashCompiled).toBeInstanceOf(Map);
+		expect(result.__bashCompiled?.size).toBe(2);
 	});
 
 	it('parses valid config without decisions', () => {
@@ -50,39 +60,39 @@ describe('parseConfig', () => {
 			bash: { '*': 'deny' },
 			tools: {},
 		});
-		const result = parseConfig(json);
-		expect(result).toEqual({
-			default: 'deny',
-			bash: { '*': 'deny' },
-			tools: {},
-		});
+		const result = parseConfigWithDecisions(json);
+		// __bashCompiled is an internal field - test the public interface
+		expect(result.default).toBe('deny');
+		expect(result.bash).toEqual({ '*': 'deny' });
+		expect(result.tools).toEqual({});
+		expect(result._decisions).toBeUndefined();
 	});
 
-	it('returns null for invalid JSON', () => {
-		expect(parseConfig('not valid json')).toBeNull();
+	it('returns DENY_ALL_CONFIG for invalid JSON', () => {
+		expect(parseConfigWithDecisions('not valid json')).toEqual(DENY_ALL_CONFIG);
 	});
 
-	it('returns null for non-object JSON', () => {
-		expect(parseConfig('"string"')).toBeNull();
-		expect(parseConfig('[]')).toBeNull();
-		expect(parseConfig('42')).toBeNull();
+	it('returns DENY_ALL_CONFIG for non-object JSON', () => {
+		expect(parseConfigWithDecisions('"string"')).toEqual(DENY_ALL_CONFIG);
+		expect(parseConfigWithDecisions('[]')).toEqual(DENY_ALL_CONFIG);
+		expect(parseConfigWithDecisions('42')).toEqual(DENY_ALL_CONFIG);
 	});
 
-	it('returns null for config missing default', () => {
+	it('returns DENY_ALL_CONFIG for config missing default', () => {
 		const json = JSON.stringify({
 			bash: {},
 			tools: {},
 		});
-		expect(parseConfig(json)).toBeNull();
+		expect(parseConfigWithDecisions(json)).toEqual(DENY_ALL_CONFIG);
 	});
 
-	it('returns null for config with invalid default value', () => {
+	it('returns DENY_ALL_CONFIG for config with invalid default value', () => {
 		const json = JSON.stringify({
 			default: 'maybe',
 			bash: {},
 			tools: {},
 		});
-		expect(parseConfig(json)).toBeNull();
+		expect(parseConfigWithDecisions(json)).toEqual(DENY_ALL_CONFIG);
 	});
 });
 
@@ -99,26 +109,30 @@ describe('loadConfig', () => {
 		);
 
 		const result = loadConfig(tempDir);
-		expect(result).toEqual(config);
+		// __bashCompiled is added during parsing
+		expect(result.default).toEqual(config.default);
+		expect(result.bash).toEqual(config.bash);
+		expect(result.tools).toEqual(config.tools);
+		expect(result.__bashCompiled).toBeInstanceOf(Map);
 	});
 
-	it('returns null when config file does not exist', async () => {
+	it('returns DENY_ALL_CONFIG when config file does not exist', async () => {
 		const result = loadConfig(tempDir);
-		expect(result).toBeNull();
+		expect(result).toEqual(DENY_ALL_CONFIG);
 	});
 
-	it('returns null when config file is corrupted', async () => {
+	it('returns DENY_ALL_CONFIG when config file is corrupted', async () => {
 		await writeFile(
 			join(tempDir, '.pi', 'permissions.json'),
 			'not valid json{{{}}}',
 		);
 		const result = loadConfig(tempDir);
-		expect(result).toBeNull();
+		expect(result).toEqual(DENY_ALL_CONFIG);
 	});
 });
 
-describe('isPermissionAllowed', () => {
-	const config = {
+describe('checkPermission', () => {
+	const config: import('../config').PermissionsConfig = {
 		default: 'deny',
 		bash: {
 			'npm install *': 'allow',
@@ -129,37 +143,45 @@ describe('isPermissionAllowed', () => {
 	};
 
 	it('allows when bash rule matches', () => {
-		expect(isPermissionAllowed(config, 'bash', 'npm install lodash')).toBe(
-			'allow',
-		);
-		expect(isPermissionAllowed(config, 'bash', 'git diff --staged')).toBe(
-			'allow',
-		);
+		expect(checkPermission(config, 'bash', 'npm install lodash')).toBe('allow');
+		expect(checkPermission(config, 'bash', 'git diff --staged')).toBe('allow');
 	});
 
 	it('denies when bash rule matches deny', () => {
-		expect(isPermissionAllowed(config, 'bash', 'git push origin')).toBe('deny');
-		expect(isPermissionAllowed(config, 'bash', 'rm -rf /')).toBe('deny');
+		expect(checkPermission(config, 'bash', 'git push origin')).toBe('deny');
+		expect(checkPermission(config, 'bash', 'rm -rf /')).toBe('deny');
 	});
 
 	it('allows tool with exact match in tools', () => {
-		expect(isPermissionAllowed(config, 'read', 'package.json')).toBe('allow');
+		expect(checkPermission(config, 'read', 'package.json')).toBe('allow');
 	});
 
 	it('denies tool with exact match in tools', () => {
-		expect(isPermissionAllowed(config, 'write', 'package.json')).toBe('deny');
-		expect(isPermissionAllowed(config, 'edit', 'package.json')).toBe('deny');
+		expect(checkPermission(config, 'write', 'package.json')).toBe('deny');
+		expect(checkPermission(config, 'edit', 'package.json')).toBe('deny');
 	});
 
 	it('uses default when no rule matches', () => {
-		expect(isPermissionAllowed(config, 'delete', 'package.json')).toBe('deny');
+		expect(checkPermission(config, 'delete', 'package.json')).toBe('deny');
 	});
 
-	it('respects decisions from config (not implemented in this version)', () => {
-		// Decisions are handled in checkPermission in permissions.ts
-		// This function only checks config rules
-		expect(isPermissionAllowed(config, 'bash', 'npm install lodash')).toBe(
-			'allow',
-		);
+	it('respects cached decisions (allow)', () => {
+		const configWithDecisions: import('../config').PermissionsConfig = {
+			...config,
+			_decisions: {
+				'npm:*': { allowed: true, timestamp: '2026-04-23T10:00:00Z' },
+			},
+		};
+		expect(checkPermission(configWithDecisions, 'npm', '*')).toBe('allow');
+	});
+
+	it('respects cached decisions (deny)', () => {
+		const configWithDecisions: import('../config').PermissionsConfig = {
+			...config,
+			_decisions: {
+				'rm:*': { allowed: false, timestamp: '2026-04-23T10:00:00Z' },
+			},
+		};
+		expect(checkPermission(configWithDecisions, 'rm', '*')).toBe('deny');
 	});
 });

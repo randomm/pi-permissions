@@ -1,51 +1,45 @@
 import {
-	existsSync,
+	chmodSync,
 	mkdirSync,
 	readFileSync,
 	renameSync,
-	unlinkSync,
 	writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import type { Decision } from './config';
+import { ensureSecureDirectory } from './config';
 
-const CONFIG_FILENAME = '.pi/permissions.json';
-const DECISIONS_KEY = '_decisions';
+const DECISIONS_FILENAME = '.pi/decisions.json';
 
-function getConfigPath(cwd: string): string {
-	return join(cwd, CONFIG_FILENAME);
+function getDecisionsPath(cwd: string): string {
+	return join(cwd, DECISIONS_FILENAME);
 }
 
-function loadFullConfig(cwd: string): Record<string, unknown> | null {
-	const configPath = getConfigPath(cwd);
-	if (!existsSync(configPath)) {
-		return null;
-	}
-
+function loadDecisionsFile(cwd: string): Record<string, Decision> | null {
+	const decisionsPath = getDecisionsPath(cwd);
 	try {
-		const raw = readFileSync(configPath, 'utf-8');
+		const raw = readFileSync(decisionsPath, 'utf-8');
 		const parsed = JSON.parse(raw);
 		if (typeof parsed !== 'object' || parsed === null) {
 			return null;
 		}
-		return parsed as Record<string, unknown>;
+		// Validate structure before returning
+		for (const [key, value] of Object.entries(parsed)) {
+			if (typeof key !== 'string') {
+				return null;
+			}
+			const decision = value as Record<string, unknown>;
+			if (
+				typeof decision.allowed !== 'boolean' ||
+				typeof decision.timestamp !== 'string'
+			) {
+				return null;
+			}
+		}
+		return parsed as Record<string, Decision>;
 	} catch {
 		return null;
 	}
-}
-
-export function loadDecisions(
-	cwd: string,
-): Record<string, { allowed: boolean; timestamp: string }> | null {
-	const config = loadFullConfig(cwd);
-	if (!config) {
-		return null;
-	}
-	return (
-		(config[DECISIONS_KEY] as Record<
-			string,
-			{ allowed: boolean; timestamp: string }
-		>) || null
-	);
 }
 
 export async function saveDecision(
@@ -54,41 +48,44 @@ export async function saveDecision(
 	input: string,
 	allowed: boolean,
 ): Promise<void> {
-	const configPath = getConfigPath(cwd);
-	const tmpPath = `${configPath}.tmp`;
+	ensureSecureDirectory(cwd);
 
-	// Load existing full config to preserve bash/tools sections
-	const existing = loadFullConfig(cwd) || {};
+	const decisionsPath = getDecisionsPath(cwd);
+	const tmpPath = `${decisionsPath}.tmp`;
+
+	// Load existing decisions
+	const existing = loadDecisionsFile(cwd) || {};
 	const key = `${toolName}:${input}`;
 
-	// Build new config preserving existing sections
-	const newConfig: Record<string, unknown> = {
+	// Build new decisions object
+	const newDecisions: Record<string, Decision> = {
 		...existing,
-		[DECISIONS_KEY]: {
-			...(existing[DECISIONS_KEY] as Record<string, unknown>),
-			[key]: {
-				allowed,
-				timestamp: new Date().toISOString(),
-			},
+		[key]: {
+			allowed,
+			timestamp: new Date().toISOString(),
 		},
 	};
 
-	// Create .pi directory if it doesn't exist
-	const piDir = join(cwd, '.pi');
-	if (!existsSync(piDir)) {
-		mkdirSync(piDir, { recursive: true });
-	}
+	// Atomic write: write to tmp, then rename with secure mode
+	writeFileSync(tmpPath, JSON.stringify(newDecisions), { mode: 0o600 });
+	chmodSync(tmpPath, 0o600);
 
-	// Atomic write: write to tmp, then rename
-	writeFileSync(tmpPath, JSON.stringify(newConfig, null, 2));
 	try {
-		renameSync(tmpPath, configPath);
+		renameSync(tmpPath, decisionsPath);
+		chmodSync(decisionsPath, 0o600);
 	} catch (err: unknown) {
 		const code = (err as { code?: string })?.code;
 		if (code === 'EXDEV') {
 			// Cross-device: fall back to read-write-delete
-			unlinkSync(configPath);
-			renameSync(tmpPath, configPath);
+			// chmod the target first to ensure we can delete it
+			try {
+				chmodSync(decisionsPath, 0o600);
+			} catch {
+				// Ignore if file doesn't exist
+			}
+			writeFileSync(decisionsPath, JSON.stringify(newDecisions), {
+				mode: 0o600,
+			});
 		} else {
 			// Re-throw if not EXDEV
 			throw err;
@@ -96,24 +93,6 @@ export async function saveDecision(
 	}
 }
 
-export function handleCorruption(cwd: string, originalPath: string): void {
-	const corruptedPath = `${originalPath}.corrupted`;
-
-	// Create .pi directory if it doesn't exist
-	const piDir = join(cwd, '.pi');
-	if (!existsSync(piDir)) {
-		mkdirSync(piDir, { recursive: true });
-	}
-
-	// Move corrupted file to backup
-	try {
-		renameSync(originalPath, corruptedPath);
-	} catch {
-		// If rename fails (e.g., file already moved), just delete the original
-		try {
-			unlinkSync(originalPath);
-		} catch {
-			// File already gone, nothing to do
-		}
-	}
+export function getDecisions(cwd: string): Record<string, Decision> | null {
+	return loadDecisionsFile(cwd);
 }

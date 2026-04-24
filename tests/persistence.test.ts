@@ -1,26 +1,18 @@
-import {
-	mkdir,
-	mkdtemp,
-	readFile,
-	rm,
-	unlink,
-	writeFile,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { handleCorruption, loadDecisions, saveDecision } from '../persistence';
+import type { Decision } from '../config';
+import { getDecisions, saveDecision } from '../persistence';
 
 let tempDir: string;
 
-function readPermissionsFile(
+async function readDecisionsFile(
 	dir: string,
-): Promise<Record<string, unknown> | null> {
-	const fs = require('node:fs/promises');
-	const path = join(dir, '.pi', 'permissions.json');
-	return fs
-		.readFile(path, 'utf-8')
-		.then((raw: string) => JSON.parse(raw))
+): Promise<Record<string, Decision> | null> {
+	const path = join(dir, '.pi', 'decisions.json');
+	return readFile(path, 'utf-8')
+		.then((raw: string) => JSON.parse(raw) as Record<string, Decision>)
 		.catch(() => null);
 }
 
@@ -41,10 +33,10 @@ afterEach(async () => {
 describe('saveDecision', () => {
 	it('saves a decision atomically', async () => {
 		await saveDecision(tempDir, 'bash', 'npm install lodash', true);
-		const data = await readPermissionsFile(tempDir);
-		if (!data) throw new Error('unexpected null config');
+		const data = await readDecisionsFile(tempDir);
+		if (!data) throw new Error('unexpected null decisions');
 
-		expect(data._decisions['bash:npm install lodash']).toEqual({
+		expect(data['bash:npm install lodash']).toEqual({
 			allowed: true,
 			timestamp: expect.any(String),
 		});
@@ -54,7 +46,7 @@ describe('saveDecision', () => {
 		const freshDir = await mkdtemp(join(tmpdir(), 'pi-fresh-'));
 		await saveDecision(freshDir, 'bash', 'npm install lodash', true);
 		const exists = await readFile(
-			join(freshDir, '.pi', 'permissions.json'),
+			join(freshDir, '.pi', 'decisions.json'),
 			'utf-8',
 		)
 			.then(() => true)
@@ -63,24 +55,33 @@ describe('saveDecision', () => {
 		await rm(freshDir, { recursive: true, force: true });
 	});
 
-	it('overwrites existing file with atomic write', async () => {
+	it('overwrites existing decisions with atomic write', async () => {
 		await saveDecision(tempDir, 'bash', 'npm install lodash', true);
 		await saveDecision(tempDir, 'bash', 'npm install express', false);
 
-		const data = await readPermissionsFile(tempDir);
-		if (!data) throw new Error('unexpected null config');
+		const data = await readDecisionsFile(tempDir);
+		if (!data) throw new Error('unexpected null decisions');
 
-		expect(data._decisions['bash:npm install lodash'].allowed).toBe(true);
-		expect(data._decisions['bash:npm install express'].allowed).toBe(false);
+		expect(data['bash:npm install lodash'].allowed).toBe(true);
+		expect(data['bash:npm install express'].allowed).toBe(false);
+	});
+
+	it('uses minified JSON (no pretty-printing)', async () => {
+		await saveDecision(tempDir, 'bash', 'npm install lodash', true);
+		const raw = await readFile(join(tempDir, '.pi', 'decisions.json'), 'utf-8');
+
+		// Minified JSON should not have newlines or spaces
+		expect(raw).not.toContain('\n');
+		expect(raw).not.toContain('  ');
 	});
 });
 
-describe('loadDecisions', () => {
-	it('loads decisions from config file', async () => {
+describe('getDecisions', () => {
+	it('loads decisions from separate file', async () => {
 		await saveDecision(tempDir, 'bash', 'npm install lodash', true);
 		await saveDecision(tempDir, 'bash', 'rm -rf /', false);
 
-		const decisions = loadDecisions(tempDir);
+		const decisions = getDecisions(tempDir);
 		expect(decisions).toEqual({
 			'bash:npm install lodash': {
 				allowed: true,
@@ -93,88 +94,29 @@ describe('loadDecisions', () => {
 		});
 	});
 
-	it('preserves existing config sections when saving', async () => {
-		const fs = require('node:fs/promises');
-		await fs.writeFile(
-			join(tempDir, '.pi', 'permissions.json'),
-			JSON.stringify({
-				default: 'deny',
-				bash: { '*': 'deny', 'npm install *': 'allow' },
-				tools: { read: 'allow' },
-				_decisions: {},
-			}),
-		);
-
-		await saveDecision(tempDir, 'bash', 'rm -rf /', false);
-
-		const data = await readPermissionsFile(tempDir);
-		if (!data) throw new Error('unexpected null config');
-
-		expect(data.default).toBe('deny');
-		expect(data.bash).toEqual({ '*': 'deny', 'npm install *': 'allow' });
-		expect(data.tools).toEqual({ read: 'allow' });
-		expect(data._decisions['bash:rm -rf /'].allowed).toBe(false);
-	});
-
 	it('returns null when file does not exist', () => {
-		const decisions = loadDecisions(tempDir);
+		const decisions = getDecisions(tempDir);
 		expect(decisions).toBeNull();
 	});
 
 	it('returns null when file is corrupted', async () => {
 		await writeFile(
-			join(tempDir, '.pi', 'permissions.json'),
+			join(tempDir, '.pi', 'decisions.json'),
 			'corrupted{{{data}}}',
 		);
-		const decisions = loadDecisions(tempDir);
+		const decisions = getDecisions(tempDir);
 		expect(decisions).toBeNull();
 	});
-});
 
-describe('handleCorruption', () => {
-	it('creates a .corrupted backup', async () => {
+	it('validates JSON structure before parsing', async () => {
+		// Write invalid decision structure (missing timestamp)
 		await writeFile(
-			join(tempDir, '.pi', 'permissions.json'),
-			'corrupted{{{data}}}',
+			join(tempDir, '.pi', 'decisions.json'),
+			JSON.stringify({
+				'bash:invalid': { allowed: true }, // missing timestamp
+			}),
 		);
-
-		const fs = require('node:fs/promises');
-		const corruptedPath = join(tempDir, '.pi', 'permissions.json.corrupted');
-		handleCorruption(tempDir, join(tempDir, '.pi', 'permissions.json'));
-
-		// Backup file exists
-		const exists = await fs
-			.access(corruptedPath)
-			.then(() => true)
-			.catch(() => false);
-		expect(exists).toBe(true);
-
-		// Original file is removed
-		const originalExists = await fs
-			.access(join(tempDir, '.pi', 'permissions.json'))
-			.then(() => true)
-			.catch(() => false);
-		expect(originalExists).toBe(false);
-	});
-
-	it('creates .pi directory if it does not exist', async () => {
-		const freshDir = await mkdtemp(join(tmpdir(), 'pi-fresh-'));
-		const fs = require('node:fs/promises');
-		await fs.mkdir(join(freshDir, '.pi'), { recursive: true });
-		await fs.writeFile(
-			join(freshDir, '.pi', 'permissions.json'),
-			'corrupted{{{data}}}',
-		);
-
-		handleCorruption(freshDir, join(freshDir, '.pi', 'permissions.json'));
-
-		const corruptedPath = join(freshDir, '.pi', 'permissions.json.corrupted');
-		const exists = await fs
-			.access(corruptedPath)
-			.then(() => true)
-			.catch(() => false);
-		expect(exists).toBe(true);
-
-		await rm(freshDir, { recursive: true, force: true });
+		const decisions = getDecisions(tempDir);
+		expect(decisions).toBeNull();
 	});
 });

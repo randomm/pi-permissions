@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { matches } from '../matcher';
-import { checkPermission } from '../permissions';
+import { type PermissionsConfig, checkPermission } from '../permissions';
 
 let tempDir: string;
 
@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 describe('checkPermission', () => {
-	const config = {
+	const config: PermissionsConfig = {
 		default: 'deny',
 		bash: {
 			'npm install *': 'allow',
@@ -57,7 +57,7 @@ describe('checkPermission', () => {
 	});
 
 	it('respects cached decisions (allow)', () => {
-		const configWithDecisions = {
+		const configWithDecisions: PermissionsConfig = {
 			...config,
 			_decisions: {
 				'npm:*': { allowed: true, timestamp: '2026-04-23T10:00:00Z' },
@@ -67,7 +67,7 @@ describe('checkPermission', () => {
 	});
 
 	it('respects cached decisions (deny)', () => {
-		const configWithDecisions = {
+		const configWithDecisions: PermissionsConfig = {
 			...config,
 			_decisions: {
 				'rm:*': { allowed: false, timestamp: '2026-04-23T10:00:00Z' },
