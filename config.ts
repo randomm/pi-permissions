@@ -1,17 +1,11 @@
-import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { matches } from './matcher';
 
 export interface PermissionsConfig {
 	default: 'allow' | 'deny';
 	bash: Record<string, 'allow' | 'deny'>;
 	tools: Record<string, 'allow' | 'deny'>;
 	_decisions?: Record<string, Decision>;
-	// Internal: pre-compiled bash patterns for performance
-	__bashCompiled?: Map<
-		string,
-		{ decision: 'allow' | 'deny'; compiled: CompiledPattern }
-	>;
 }
 
 export interface Decision {
@@ -19,21 +13,18 @@ export interface Decision {
 	timestamp: string;
 }
 
-export interface CompiledPattern {
-	segments: string[];
-	hasWildcard: boolean;
-}
-
 export const DENY_ALL_CONFIG: PermissionsConfig = {
 	default: 'deny',
 	bash: {},
 	tools: {},
-	__bashCompiled: new Map(),
 };
 
 const CONFIG_FILENAME = '.pi/permissions.json';
 const ALLOWED_CONFIG_KEYS = new Set(['default', 'bash', 'tools', '_decisions']);
 
+/**
+ * Validates if a value is a valid Decision object.
+ */
 export function isValidDecision(value: unknown): value is Decision {
 	if (typeof value !== 'object' || value === null) {
 		return false;
@@ -45,26 +36,11 @@ export function isValidDecision(value: unknown): value is Decision {
 	);
 }
 
+/**
+ * Validates if a value is a valid rule ('allow' or 'deny').
+ */
 export function isValidRule(value: unknown): value is 'allow' | 'deny' {
 	return value === 'allow' || value === 'deny';
-}
-
-export function compilePattern(pattern: string): CompiledPattern {
-	const segments = pattern.split('*');
-	return {
-		segments,
-		hasWildcard: pattern.includes('*'),
-	};
-}
-
-export function matchesCompiled(
-	compiled: CompiledPattern,
-	input: string,
-): boolean {
-	// Use the existing matches function which is well-tested
-	// This is a temporary wrapper - the real optimization is avoiding split('*') at callsite
-	const pattern = compiled.segments.join('*');
-	return matches(pattern, input);
 }
 
 function validateAndFilterRules(
@@ -91,6 +67,12 @@ function validateAndFilterDecisions(
 	return filtered;
 }
 
+/**
+ * Parses a JSON config string with optional decisions into a PermissionsConfig.
+ * Returns DENY_ALL_CONFIG if JSON is invalid or structure is malformed.
+ * @param json - JSON string to parse
+ * @returns Validated PermissionsConfig or DENY_ALL_CONFIG
+ */
 export function parseConfigWithDecisions(json: string): PermissionsConfig {
 	let parsed: unknown;
 	try {
@@ -106,7 +88,6 @@ export function parseConfigWithDecisions(json: string): PermissionsConfig {
 	const obj = parsed as Record<string, unknown>;
 
 	// Validate allowed keys (prototype pollution prevention)
-	// Use Object.keys to get actual property names, not prototype chain
 	const actualKeys = Object.keys(obj);
 	for (const key of actualKeys) {
 		// Check for prototype pollution attempts
@@ -143,8 +124,7 @@ export function parseConfigWithDecisions(json: string): PermissionsConfig {
 
 		// Check for nested prototype pollution in _decisions
 		if (typeof rawDecisions === 'object' && rawDecisions !== null) {
-			// Use Object.getOwnPropertyNames to get all properties including constructor
-			const decisionKeys = Object.getOwnPropertyNames(rawDecisions as object);
+			const decisionKeys = Object.getOwnPropertyNames(rawDecisions);
 			for (const key of decisionKeys) {
 				if (
 					key === '__proto__' ||
@@ -172,24 +152,20 @@ export function parseConfigWithDecisions(json: string): PermissionsConfig {
 		tools as Record<string, unknown>,
 	);
 
-	// Pre-compile bash patterns for performance (C5)
-	const bashCompiled = new Map<
-		string,
-		{ decision: 'allow' | 'deny'; compiled: CompiledPattern }
-	>();
-	for (const [pattern, decision] of Object.entries(filteredBash)) {
-		bashCompiled.set(pattern, { decision, compiled: compilePattern(pattern) });
-	}
-
 	return {
 		default: defaultValue,
 		bash: filteredBash,
 		tools: filteredTools,
 		_decisions: decisions,
-		__bashCompiled: bashCompiled,
 	};
 }
 
+/**
+ * Loads permissions config from .pi/permissions.json in the given directory.
+ * Returns DENY_ALL_CONFIG if file doesn't exist or is invalid.
+ * @param cwd - Current working directory
+ * @returns PermissionsConfig
+ */
 export function loadConfig(cwd: string): PermissionsConfig {
 	const configPath = join(cwd, CONFIG_FILENAME);
 	try {
@@ -198,52 +174,4 @@ export function loadConfig(cwd: string): PermissionsConfig {
 	} catch {
 		return DENY_ALL_CONFIG;
 	}
-}
-
-export function ensureSecureDirectory(cwd: string): void {
-	const piDir = join(cwd, '.pi');
-	if (mkdirSync(piDir, { recursive: true, mode: 0o700 })) {
-		// chmod in case umask changed it
-		chmodSync(piDir, 0o700);
-	}
-}
-
-export function checkPermission(
-	config: PermissionsConfig,
-	toolName: string,
-	input: string,
-): 'allow' | 'deny' | 'ask' {
-	const key = `${toolName}:${input}`;
-
-	// Check cached decisions first
-	if (config._decisions?.[key]) {
-		return config._decisions[key].allowed ? 'allow' : 'deny';
-	}
-
-	// Check bash rules with pattern matching (uses pre-compiled patterns for performance)
-	if (toolName === 'bash') {
-		// Use pre-compiled patterns if available (from parseConfigWithDecisions)
-		if (config.__bashCompiled) {
-			for (const item of config.__bashCompiled.values()) {
-				if (matchesCompiled(item.compiled, input)) {
-					return item.decision;
-				}
-			}
-		} else {
-			// Fallback for configs created manually without compilation
-			for (const [pattern, decision] of Object.entries(config.bash)) {
-				if (matches(pattern, input)) {
-					return decision;
-				}
-			}
-		}
-	}
-
-	// Check tool-specific rules (exact match)
-	if (config.tools[toolName]) {
-		return config.tools[toolName];
-	}
-
-	// Fall back to default
-	return config.default;
 }

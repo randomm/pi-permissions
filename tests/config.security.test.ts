@@ -1,12 +1,72 @@
-import { describe, expect, it } from 'vitest';
+import { chmodSync, mkdirSync, statSync } from 'node:fs';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
 	DENY_ALL_CONFIG,
-	compilePattern,
 	isValidDecision,
 	isValidRule,
-	matchesCompiled,
+	loadConfig,
 	parseConfigWithDecisions,
 } from '../config';
+import { ensureSecureDirectory } from '../security';
+
+let tempDir: string;
+
+beforeEach(async () => {
+	const base = await mkdtemp(join(tmpdir(), 'pi-security-'));
+	tempDir = base;
+});
+
+afterEach(async () => {
+	try {
+		await rm(tempDir, { recursive: true, force: true });
+	} catch {
+		// ignore cleanup errors
+	}
+});
+
+describe('ensureSecureDirectory', () => {
+	it('creates .pi directory with secure permissions', async () => {
+		const freshDir = join(tmpdir(), 'fresh-test');
+		await mkdir(freshDir, { recursive: true });
+
+		ensureSecureDirectory(freshDir);
+
+		// Verify directory exists
+		const stats = statSync(join(freshDir, '.pi'));
+		expect(stats.isDirectory()).toBe(true);
+
+		await rm(freshDir, { recursive: true, force: true });
+	});
+
+	it('F3: chmod failure succeeds if directory already has secure permissions', () => {
+		// Pre-create .pi with mode 0o700
+		const piDir = join(tempDir, '.pi');
+		mkdirSync(piDir, { mode: 0o700 });
+
+		// Verify it already has secure permissions
+		const stats = statSync(piDir);
+		const currentMode = stats.mode & 0o777;
+		expect(currentMode).toBeLessThanOrEqual(0o700);
+
+		// Should NOT throw
+		expect(() => ensureSecureDirectory(tempDir)).not.toThrow();
+	});
+
+	it('F3: chmod works correctly and secure directory is actually secure', async () => {
+		// Create directory and ensure secure permissions
+		ensureSecureDirectory(tempDir);
+
+		const piDir = join(tempDir, '.pi');
+		const stats = statSync(piDir);
+		const currentMode = stats.mode & 0o777;
+
+		// Should be 0o700 (or less)
+		expect(currentMode).toBeLessThanOrEqual(0o700);
+	});
+});
 
 describe('config security', () => {
 	describe('parseConfigWithDecisions - fail-closed behavior', () => {
@@ -23,7 +83,6 @@ describe('config security', () => {
 		});
 
 		it('returns DENY_ALL_CONFIG for missing file (via loadConfig)', () => {
-			const { loadConfig } = require('../config');
 			const result = loadConfig('/nonexistent/path');
 			expect(result).toEqual(DENY_ALL_CONFIG);
 		});
@@ -79,7 +138,6 @@ describe('config security', () => {
 			expect(result.bash).toEqual({});
 			expect(result.tools).toEqual({});
 			expect(result._decisions).toBeUndefined();
-			expect(result.__bashCompiled).toBeInstanceOf(Map);
 		});
 
 		it('rejects constructor key', () => {
@@ -214,61 +272,4 @@ describe('config security', () => {
 	});
 });
 
-describe('pattern compilation', () => {
-	describe('compilePattern', () => {
-		it('compiles simple patterns', () => {
-			const compiled = compilePattern('npm install *');
-			expect(compiled.segments).toEqual(['npm install ', '']);
-			expect(compiled.hasWildcard).toBe(true);
-		});
-
-		it('compiles patterns without wildcards', () => {
-			const compiled = compilePattern('git status');
-			expect(compiled.segments).toEqual(['git status']);
-			expect(compiled.hasWildcard).toBe(false);
-		});
-
-		it('compiles patterns with leading wildcard', () => {
-			const compiled = compilePattern('* install');
-			expect(compiled.segments).toEqual(['', ' install']);
-			expect(compiled.hasWildcard).toBe(true);
-		});
-
-		it('compiles patterns with multiple wildcards', () => {
-			const compiled = compilePattern('git * * status');
-			expect(compiled.segments).toEqual(['git ', ' ', ' status']);
-			expect(compiled.hasWildcard).toBe(true);
-		});
-
-		it('compiles empty pattern', () => {
-			const compiled = compilePattern('');
-			expect(compiled.segments).toEqual(['']);
-			expect(compiled.hasWildcard).toBe(false);
-		});
-	});
-
-	describe('matchesCompiled', () => {
-		it('matches compiled patterns correctly', () => {
-			const pattern1 = compilePattern('npm install *');
-			expect(matchesCompiled(pattern1, 'npm install lodash')).toBe(true);
-			expect(matchesCompiled(pattern1, 'npm install express')).toBe(true);
-			expect(matchesCompiled(pattern1, 'npm uninstall')).toBe(false);
-
-			const pattern2 = compilePattern('git status');
-			expect(matchesCompiled(pattern2, 'git status')).toBe(true);
-			expect(matchesCompiled(pattern2, 'git status --short')).toBe(false);
-		});
-
-		it('performance: does not re-split pattern on each match', () => {
-			const pattern = compilePattern('npm install *');
-			// This test verifies compilation happens once
-			expect(pattern.segments).toBeDefined();
-			expect(pattern.hasWildcard).toBeDefined();
-
-			// Multiple matches should be fast (no splitting)
-			for (let i = 0; i < 100; i++) {
-				matchesCompiled(pattern, `npm install package${i}`);
-			}
-		});
-	});
-});
+// All imports are at the top now - no need for helper functions

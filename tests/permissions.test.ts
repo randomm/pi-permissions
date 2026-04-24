@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { matches } from '../matcher';
-import { type PermissionsConfig, checkPermission } from '../permissions';
+import type { PermissionsConfig } from '../config';
+import { checkPermission } from '../permissions';
 
 let tempDir: string;
 
@@ -74,13 +74,6 @@ describe('checkPermission', () => {
 			},
 		};
 		expect(checkPermission(configWithDecisions, 'rm', '*')).toBe('deny');
-	});
-
-	it('uses matcher for bash pattern matching', () => {
-		expect(checkPermission(config, 'bash', 'npm install lodash')).toBe('allow');
-		expect(checkPermission(config, 'bash', 'git diff --staged')).toBe('allow');
-		expect(checkPermission(config, 'bash', 'git push origin')).toBe('deny');
-		expect(checkPermission(config, 'bash', 'rm -rf /')).toBe('deny');
 	});
 
 	it('falls back to default deny for unknown tool', () => {

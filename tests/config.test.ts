@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
 	DENY_ALL_CONFIG,
-	checkPermission,
 	loadConfig,
 	parseConfigWithDecisions,
 } from '../config';
@@ -42,16 +41,12 @@ describe('parseConfig', () => {
 			tools: { read: 'allow', write: 'deny' },
 		});
 		const result = parseConfigWithDecisions(json);
-		// __bashCompiled is an internal field - test the public interface
 		expect(result.default).toBe('deny');
 		expect(result.bash).toEqual({ '*': 'deny', 'npm install *': 'allow' });
 		expect(result.tools).toEqual({ read: 'allow', write: 'deny' });
 		expect(result._decisions).toEqual({
 			'npm install *': { allowed: true, timestamp: '2026-04-23T10:00:00Z' },
 		});
-		// Verify pre-compiled patterns exist
-		expect(result.__bashCompiled).toBeInstanceOf(Map);
-		expect(result.__bashCompiled?.size).toBe(2);
 	});
 
 	it('parses valid config without decisions', () => {
@@ -61,7 +56,6 @@ describe('parseConfig', () => {
 			tools: {},
 		});
 		const result = parseConfigWithDecisions(json);
-		// __bashCompiled is an internal field - test the public interface
 		expect(result.default).toBe('deny');
 		expect(result.bash).toEqual({ '*': 'deny' });
 		expect(result.tools).toEqual({});
@@ -109,11 +103,9 @@ describe('loadConfig', () => {
 		);
 
 		const result = loadConfig(tempDir);
-		// __bashCompiled is added during parsing
 		expect(result.default).toEqual(config.default);
 		expect(result.bash).toEqual(config.bash);
 		expect(result.tools).toEqual(config.tools);
-		expect(result.__bashCompiled).toBeInstanceOf(Map);
 	});
 
 	it('returns DENY_ALL_CONFIG when config file does not exist', async () => {
@@ -128,60 +120,5 @@ describe('loadConfig', () => {
 		);
 		const result = loadConfig(tempDir);
 		expect(result).toEqual(DENY_ALL_CONFIG);
-	});
-});
-
-describe('checkPermission', () => {
-	const config: import('../config').PermissionsConfig = {
-		default: 'deny',
-		bash: {
-			'npm install *': 'allow',
-			'git diff *': 'allow',
-			'*': 'deny',
-		},
-		tools: { read: 'allow', write: 'deny', edit: 'deny' },
-	};
-
-	it('allows when bash rule matches', () => {
-		expect(checkPermission(config, 'bash', 'npm install lodash')).toBe('allow');
-		expect(checkPermission(config, 'bash', 'git diff --staged')).toBe('allow');
-	});
-
-	it('denies when bash rule matches deny', () => {
-		expect(checkPermission(config, 'bash', 'git push origin')).toBe('deny');
-		expect(checkPermission(config, 'bash', 'rm -rf /')).toBe('deny');
-	});
-
-	it('allows tool with exact match in tools', () => {
-		expect(checkPermission(config, 'read', 'package.json')).toBe('allow');
-	});
-
-	it('denies tool with exact match in tools', () => {
-		expect(checkPermission(config, 'write', 'package.json')).toBe('deny');
-		expect(checkPermission(config, 'edit', 'package.json')).toBe('deny');
-	});
-
-	it('uses default when no rule matches', () => {
-		expect(checkPermission(config, 'delete', 'package.json')).toBe('deny');
-	});
-
-	it('respects cached decisions (allow)', () => {
-		const configWithDecisions: import('../config').PermissionsConfig = {
-			...config,
-			_decisions: {
-				'npm:*': { allowed: true, timestamp: '2026-04-23T10:00:00Z' },
-			},
-		};
-		expect(checkPermission(configWithDecisions, 'npm', '*')).toBe('allow');
-	});
-
-	it('respects cached decisions (deny)', () => {
-		const configWithDecisions: import('../config').PermissionsConfig = {
-			...config,
-			_decisions: {
-				'rm:*': { allowed: false, timestamp: '2026-04-23T10:00:00Z' },
-			},
-		};
-		expect(checkPermission(configWithDecisions, 'rm', '*')).toBe('deny');
 	});
 });

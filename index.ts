@@ -1,6 +1,29 @@
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
-import { checkPermission, loadConfig } from './config';
+import type { PermissionsConfig } from './config';
+import { loadConfig } from './config';
+import { checkPermission } from './permissions';
 import { getDecisions, saveDecision } from './persistence';
+
+function updateDecisionCache(
+	config: PermissionsConfig,
+	toolName: string,
+	inputStr: string,
+	allowed: boolean,
+): void {
+	if (config._decisions) {
+		config._decisions[`${toolName}:${inputStr}`] = {
+			allowed,
+			timestamp: new Date().toISOString(),
+		};
+	} else {
+		config._decisions = {
+			[`${toolName}:${inputStr}`]: {
+				allowed,
+				timestamp: new Date().toISOString(),
+			},
+		};
+	}
+}
 
 export default function (pi: ExtensionAPI): void {
 	let cachedConfig: ReturnType<typeof loadConfig> | null = null;
@@ -12,7 +35,7 @@ export default function (pi: ExtensionAPI): void {
 		if (cachedConfig) {
 			// Load decisions from separate file
 			const decisions = getDecisions(ctx.cwd);
-			if (decisions) {
+			if (decisions && cachedConfig._decisions === undefined) {
 				cachedConfig._decisions = decisions;
 			}
 			ctx.ui.notify(
@@ -64,24 +87,12 @@ export default function (pi: ExtensionAPI): void {
 
 		if (confirmed) {
 			await saveDecision(cwd, event.toolName, inputStr, true);
-			// Update cache
-			if (cachedConfig._decisions) {
-				cachedConfig._decisions[`${event.toolName}:${inputStr}`] = {
-					allowed: true,
-					timestamp: new Date().toISOString(),
-				};
-			}
+			updateDecisionCache(cachedConfig, event.toolName, inputStr, true);
 			return;
 		}
 
 		await saveDecision(cwd, event.toolName, inputStr, false);
-		// Update cache
-		if (cachedConfig._decisions) {
-			cachedConfig._decisions[`${event.toolName}:${inputStr}`] = {
-				allowed: false,
-				timestamp: new Date().toISOString(),
-			};
-		}
+		updateDecisionCache(cachedConfig, event.toolName, inputStr, false);
 		return { block: true, reason: `Permission denied: ${event.toolName}` };
 	});
 }

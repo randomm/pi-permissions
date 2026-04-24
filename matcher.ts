@@ -59,6 +59,12 @@ function matchSegmentsMemo(
 				memo.set(memoKey, false);
 				return false;
 			}
+			if (segIdx === segments.length - 1) {
+				// Last segment: must consume entire input
+				const result = input.length === segment.length;
+				memo.set(memoKey, result);
+				return result;
+			}
 			const result = matchSegmentsMemo(
 				segments,
 				input,
