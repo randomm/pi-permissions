@@ -2,7 +2,14 @@
 	"name": "@randomm/pi-permissions",
 	"version": "0.1.0",
 	"type": "module",
-	"keywords": ["pi-package"],
+	"license": "Apache-2.0",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"permissions",
+		"deny-by-default",
+		"security"
+	],
 	"pi": {
 		"extensions": ["./index.ts"]
 	},
