@@ -119,33 +119,35 @@ fix(#7): correct PI_SUBAGENT_STACK propagation in nested agents
 
 ### Squash-merge issue linking
 
-GitHub auto-closes linked issues only when `Fixes #N` (or `Closes #N`/`Resolves #N`) appears in the **commit body** of the merged commit. The squash *subject* (`--subject`) is NOT scanned for issue keywords.
+This repo is configured with `squash_merge_commit_title=PR_TITLE`, `squash_merge_commit_message=PR_BODY`, and `allow_merge_commit=false` (squash-only merges; squash commit body = PR description). The guidance below assumes those settings.
 
-When squash-merging via `gh pr merge --squash`, ensure `Fixes #N` lands in the squash commit body. Recommended approaches in order:
+GitHub auto-closes a linked issue only when the **merge commit body** contains `Fixes #N` (or `Closes #N`/`Resolves #N`, plus `Fix`/`Close`/`Resolve`/`Fixed`/`Closed`/`Resolved` variants). With this repo's settings, the squash commit body equals the PR description, so put `Fixes #N` in the **PR body** (not the title, not commit messages).
 
-1. **Put `Fixes #N` in the PR description's first body line.** When `--body` is omitted, GitHub uses the PR description as the squash commit body.
-2. **If passing `--body` explicitly, also put `Fixes #N` on its own line near the top.** Confirmed: `--subject` + `--body` together can cause GitHub to drop `--body` content; verify by inspecting the merge commit.
+**`(#N)` is NOT a close keyword.** A Conventional-Commits scope like `chore(#7): foo` does not close issue #7. Only `Fixes #7` (or equivalent) does.
 
-**After every squash merge, verify the linked issue auto-closed.** Use:
+**Preferred invocation:**
+
+```bash
+oo gh pr create \
+  --base main \
+  --title "chore: fix squash-merge auto-close" \
+  --body "Fixes #7
+
+Updates repo settings and AGENTS.md squash-merge guidance.
+"
+oo gh pr merge 7 --squash --delete-branch
+```
+
+- Pass `--base main` explicitly (a previous PR was opened against the wrong base).
+- Do NOT pass `--subject` / `--body` to `gh pr merge` — let GitHub use the PR body.
+
+**After every squash merge, verify the linked issue auto-closed:**
 
 ```bash
 oo gh issue view N --json state
 ```
 
-If state is still OPEN, close manually with:
-
-```bash
-oo gh issue close N --reason completed
-```
-
-and treat the convention as broken — investigate before next merge.
-
-**Preferred invocation:**
-
-```bash
-# PR body already contains "Fixes #N"
-oo gh pr merge 3 --squash --delete-branch
-```
+If still OPEN, close manually with `oo gh issue close N --reason completed` AND treat the convention as broken — re-check the repo settings (`squash_merge_commit_message` should be `PR_BODY`, not `COMMIT_MESSAGES`).
 
 ## Documentation Policy
 
