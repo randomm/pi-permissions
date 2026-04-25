@@ -1,5 +1,7 @@
 # @randomm/pi-permissions
 
+[![CI](https://github.com/randomm/pi-permissions/actions/workflows/ci.yml/badge.svg)](https://github.com/randomm/pi-permissions/actions/workflows/ci.yml)
+
 Deny-by-default tool interception for Pi agent sessions. Intercepts all tool calls (bash, read, write, edit, etc.) and enforces per-project allow/deny rules with persistent decision logging.
 
 ## Installation
