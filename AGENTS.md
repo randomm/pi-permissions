@@ -115,7 +115,37 @@ fix(#7): correct PI_SUBAGENT_STACK propagation in nested agents
 - Link PR to issue: `Fixes #N` in PR description
 - Include issue number in all commits: `feat(#N): description`
 - All quality gates must pass locally before push
-- PRs auto-close linked issues on merge
+- PRs auto-close linked issues on merge (See "Squash-merge issue linking" below for issue auto-close rules.)
+
+### Squash-merge issue linking
+
+GitHub auto-closes linked issues only when `Fixes #N` (or `Closes #N`/`Resolves #N`) appears in the **commit body** of the merged commit. The squash *subject* (`--subject`) is NOT scanned for issue keywords.
+
+When squash-merging via `gh pr merge --squash`, ensure `Fixes #N` lands in the squash commit body. Recommended approaches in order:
+
+1. **Put `Fixes #N` in the PR description's first body line.** When `--body` is omitted, GitHub uses the PR description as the squash commit body.
+2. **If passing `--body` explicitly, also put `Fixes #N` on its own line near the top.** Confirmed: `--subject` + `--body` together can cause GitHub to drop `--body` content; verify by inspecting the merge commit.
+
+**After every squash merge, verify the linked issue auto-closed.** Use:
+
+```bash
+oo gh issue view N --json state
+```
+
+If state is still OPEN, close manually with:
+
+```bash
+oo gh issue close N --reason completed
+```
+
+and treat the convention as broken — investigate before next merge.
+
+**Preferred invocation:**
+
+```bash
+# PR body already contains "Fixes #N"
+oo gh pr merge 3 --squash --delete-branch
+```
 
 ## Documentation Policy
 
